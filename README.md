@@ -29,4 +29,6 @@ SBN_YIELD = 0.065
 RAPIDAPI_KEY = "your_rapidapi_key"
 ```
 
+The app also accepts common Streamlit secret variants such as `fred_api_key`, `FRED_KEY`, `fred_key`, or a nested `[fred]` section with `api_key`, `API_KEY`, or `key`. FRED cache entries are keyed by a hash of the configured key, so adding or changing the secret causes the dashboard to refetch FRED data instead of replaying a cached “missing key” result.
+
 `SBN_YIELD` should be updated manually when a new ORI/SBR offering changes the relevant risk-free comparison rate.

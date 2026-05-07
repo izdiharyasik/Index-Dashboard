@@ -1,3 +1,5 @@
+import hashlib
+import os
 from datetime import date, timedelta
 
 import numpy as np
@@ -183,18 +185,46 @@ def get_secret_float(name, default):
         return default
 
 
+def get_fred_api_key():
+    """Read the FRED API key from common Streamlit secret formats."""
+    secret_keys = ("FRED_API_KEY", "fred_api_key", "FRED_KEY", "fred_key")
+    for name in secret_keys:
+        value = st.secrets.get(name)
+        if value:
+            return str(value).strip()
+
+    fred_section = st.secrets.get("fred")
+    if hasattr(fred_section, "get"):
+        for name in ("api_key", "API_KEY", "key"):
+            value = fred_section.get(name)
+            if value:
+                return str(value).strip()
+
+    for name in secret_keys:
+        value = os.environ.get(name)
+        if value:
+            return value.strip()
+
+    return ""
+
+
+def fred_api_key_cache_token(api_key):
+    if not api_key:
+        return "missing"
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+
+
 @st.cache_data(ttl=86400)
-def fetch_fred_series(series_id, limit=3):
+def fetch_fred_series(series_id, _api_key, api_key_cache_token, limit=3):
     try:
-        api_key = st.secrets.get("FRED_API_KEY", "")
-        if not api_key:
-            st.warning(f"FRED_API_KEY is missing. {series_id} data is unavailable until configured.")
+        if not _api_key:
+            st.warning(f"FRED API key is missing. {series_id} data is unavailable until configured.")
             return pd.DataFrame(columns=["date", "value"])
         response = requests.get(
             FRED_BASE_URL,
             params={
                 "series_id": series_id,
-                "api_key": api_key,
+                "api_key": _api_key,
                 "sort_order": "desc",
                 "limit": limit,
                 "file_type": "json",
@@ -406,7 +436,7 @@ def normalize_series(series):
     return clean / clean.iloc[0] * 100
 
 
-def build_chart_data(period_key, sbn_yield):
+def build_chart_data(period_key, sbn_yield, fred_api_key, fred_cache_token):
     days = {"3M": 92, "6M": 183, "1Y": 365, "3Y": 1095}[period_key]
     start = pd.Timestamp.today().normalize() - pd.Timedelta(days=days)
     dates = pd.date_range(start=start, end=pd.Timestamp.today().normalize(), freq="D")
@@ -420,7 +450,7 @@ def build_chart_data(period_key, sbn_yield):
                 series = frame["Close"][frame.index >= start]
                 chart_data[name] = normalize_series(series).reindex(dates).ffill()
 
-    cpi = fetch_fred_series("CPIAUCSL", 60)
+    cpi = fetch_fred_series("CPIAUCSL", fred_api_key, fred_cache_token, 60)
     if not cpi.empty:
         cpi_series = cpi.set_index("date")["value"]
         cpi_daily = cpi_series.reindex(dates.union(cpi_series.index)).sort_index().ffill().reindex(dates)
@@ -507,11 +537,13 @@ def main():
     st.caption("Monthly DCA guidance for Bibit Indonesia index-fund investors. Data refreshes at most once per day.")
 
     sbn_yield = get_secret_float("SBN_YIELD", 0.065)
+    fred_api_key = get_fred_api_key()
+    fred_cache_token = fred_api_key_cache_token(fred_api_key)
 
-    fed = fetch_fred_series("FEDFUNDS", 60)
-    cpi = fetch_fred_series("CPIAUCSL", 60)
-    dgs2 = fetch_fred_series("DGS2", 10)
-    dgs10 = fetch_fred_series("DGS10", 10)
+    fed = fetch_fred_series("FEDFUNDS", fred_api_key, fred_cache_token, 60)
+    cpi = fetch_fred_series("CPIAUCSL", fred_api_key, fred_cache_token, 60)
+    dgs2 = fetch_fred_series("DGS2", fred_api_key, fred_cache_token, 10)
+    dgs10 = fetch_fred_series("DGS10", fred_api_key, fred_cache_token, 10)
     dxy = fetch_yfinance_history("DX-Y.NYB", "1y")
     vix = fetch_yfinance_history("^VIX", "1y")
     sp500 = fetch_yfinance_history("^GSPC", "1y")
@@ -580,7 +612,7 @@ def main():
     controls = st.columns([1, 2])
     period = controls[0].selectbox("Time Period", ["3M", "6M", "1Y", "3Y"], index=2)
     selected_lines = controls[1].multiselect("Lines", list(CHART_LINES.keys()), default=list(CHART_LINES.keys()))
-    chart_data = build_chart_data(period, sbn_yield)
+    chart_data = build_chart_data(period, sbn_yield, fred_api_key, fred_cache_token)
 
     fig = go.Figure()
     for name in selected_lines:
