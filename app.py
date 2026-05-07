@@ -148,7 +148,6 @@ CHART_LINES = {
     "Risk-Free (SBN)": {"source": "static", "color": "#FF9800", "style": "dash"},
 }
 
-FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
 st.markdown(
     """
@@ -215,34 +214,19 @@ def fred_api_key_cache_token(api_key):
 
 
 @st.cache_data(ttl=86400)
-def fetch_fred_series(series_id, _api_key, api_key_cache_token, limit=3):
+def fetch_fred_series(series_id, limit=10):
+    """Fetch FRED data via Nasdaq Data Link - no API key required."""
+    url = f"https://data.nasdaq.com/api/v3/datasets/FRED/{series_id}.json?rows={limit}&order=desc"
     try:
-        if not _api_key:
-            st.warning(f"FRED API key is missing. {series_id} data is unavailable until configured.")
-            return pd.DataFrame(columns=["date", "value"])
-        response = requests.get(
-            FRED_BASE_URL,
-            params={
-                "series_id": series_id,
-                "api_key": _api_key,
-                "sort_order": "desc",
-                "limit": limit,
-                "file_type": "json",
-            },
-            timeout=15,
-        )
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        observations = response.json().get("observations", [])
-        frame = pd.DataFrame(observations)
-        if frame.empty:
-            st.warning(f"FRED returned no observations for {series_id}.")
-            return pd.DataFrame(columns=["date", "value"])
-        frame = frame[["date", "value"]].copy()
+        records = response.json()["dataset"]["data"]
+        frame = pd.DataFrame(records, columns=["date", "value"])
         frame["date"] = pd.to_datetime(frame["date"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
         return frame.dropna().sort_values("date")
     except Exception as exc:
-        st.warning(f"Could not fetch FRED series {series_id}: {exc}")
+        st.warning(f"Could not fetch {series_id}: {exc}")
         return pd.DataFrame(columns=["date", "value"])
 
 
