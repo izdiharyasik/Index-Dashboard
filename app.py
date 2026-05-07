@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from io import StringIO
 
 import numpy as np
 import pandas as pd
@@ -146,7 +147,6 @@ CHART_LINES = {
     "Risk-Free (SBN)": {"source": "static", "color": "#FF9800", "style": "dash"},
 }
 
-FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
 st.markdown(
     """
@@ -184,35 +184,33 @@ def get_secret_float(name, default):
 
 
 @st.cache_data(ttl=86400)
-def fetch_fred_series(series_id, limit=3):
+def fetch_fred_series(series_id, *args, limit=10):
+    """Fetch public FRED graph CSV data without an API key.
+
+    Legacy callers may still pass the old FRED API key and cache-token
+    arguments before the row limit; ignore those and keep the final integer
+    positional argument as the requested row count.
+    """
+    for arg in reversed(args):
+        if isinstance(arg, int) and not isinstance(arg, bool):
+            limit = arg
+            break
+
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
     try:
-        api_key = st.secrets.get("FRED_API_KEY", "")
-        if not api_key:
-            st.warning(f"FRED_API_KEY is missing. {series_id} data is unavailable until configured.")
-            return pd.DataFrame(columns=["date", "value"])
-        response = requests.get(
-            FRED_BASE_URL,
-            params={
-                "series_id": series_id,
-                "api_key": api_key,
-                "sort_order": "desc",
-                "limit": limit,
-                "file_type": "json",
-            },
-            timeout=15,
-        )
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        observations = response.json().get("observations", [])
-        frame = pd.DataFrame(observations)
-        if frame.empty:
-            st.warning(f"FRED returned no observations for {series_id}.")
-            return pd.DataFrame(columns=["date", "value"])
+        frame = pd.read_csv(StringIO(response.text))
+        if frame.empty or len(frame.columns) < 2:
+            raise ValueError("FRED returned no usable data")
+
+        frame = frame.rename(columns={frame.columns[0]: "date", frame.columns[1]: "value"})
         frame = frame[["date", "value"]].copy()
         frame["date"] = pd.to_datetime(frame["date"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
-        return frame.dropna().sort_values("date")
+        return frame.dropna().sort_values("date").tail(limit)
     except Exception as exc:
-        st.warning(f"Could not fetch FRED series {series_id}: {exc}")
+        st.warning(f"Could not fetch {series_id}: {exc}")
         return pd.DataFrame(columns=["date", "value"])
 
 
@@ -383,6 +381,42 @@ def map_funds(categories):
     return [BIBIT_FUND_MAP.get(category, category) for category in categories]
 
 
+def unique_preserve_order(items):
+    return list(dict.fromkeys(items))
+
+
+def adjusted_playbook_for_market_context(playbook, ihsg_trend):
+    adjusted = {
+        "overweight": list(playbook["overweight"]),
+        "neutral": list(playbook["neutral"]),
+        "underweight": list(playbook["underweight"]),
+        "rationale": playbook["rationale"],
+    }
+
+    if ihsg_trend != "IDX BEAR":
+        return adjusted
+
+    local_index_categories = {"IDX LQ45 Index", "IDX30 Index", "IDX Commodity Stocks Index"}
+    local_overweights = [category for category in adjusted["overweight"] if category in local_index_categories]
+    if not local_overweights:
+        return adjusted
+
+    adjusted["overweight"] = [category for category in adjusted["overweight"] if category not in local_index_categories]
+    adjusted["neutral"] = [category for category in adjusted["neutral"] if category not in local_index_categories]
+
+    global_tilt_candidates = ["S&P 500 Index", "Global Dividend Index"]
+    for category in global_tilt_candidates:
+        if category in adjusted["neutral"]:
+            adjusted["neutral"].remove(category)
+        if category not in adjusted["underweight"]:
+            adjusted["overweight"].append(category)
+
+    adjusted["neutral"].extend(local_overweights)
+    adjusted["overweight"] = unique_preserve_order(adjusted["overweight"])
+    adjusted["neutral"] = unique_preserve_order(adjusted["neutral"])
+    return adjusted
+
+
 def rate_cycle_month(rate_frame):
     if len(rate_frame) < 4:
         return None
@@ -445,14 +479,14 @@ def render_signal_grid(signals):
 
 
 def render_recommendation(regime, dollar, ihsg_trend):
-    playbook = REGIME_PLAYBOOK[regime]
+    playbook = adjusted_playbook_for_market_context(REGIME_PLAYBOOK[regime], ihsg_trend)
     dollar_note = (
         "STRONG DOLLAR: EM index funds are unfavorable — dollar strength can hurt emerging-market returns."
         if dollar == "STRONG DOLLAR"
         else "WEAK DOLLAR: EM and commodity exposure receives an extra macro boost."
     )
     ihsg_note = (
-        "IDX locally weak. Tilt DCA toward US/global index over IDX funds this month."
+        "IDX locally weak. Buy-more list is tilted toward US/global funds; keep IDX funds at hold instead of adding this month."
         if ihsg_trend == "IDX BEAR"
         else "IDX showing strength. Local index funds can carry higher allocation this month."
     )
@@ -608,7 +642,7 @@ def main():
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         margin=dict(l=10, r=10, t=70, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     sp500_return = np.nan
     inflation_cost = np.nan
