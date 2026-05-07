@@ -20,7 +20,7 @@ streamlit run app.py
 
 ## Streamlit secrets
 
-FRED data is fetched through Nasdaq Data Link's public FRED dataset endpoint, so no FRED API key is required. Secrets are only needed for the manually configured SBN yield and the optional RapidAPI Fear & Greed source.
+FRED data is fetched through FRED's public graph CSV endpoint, so no FRED API key is required. Secrets are only needed for the manually configured SBN yield and the optional RapidAPI Fear & Greed source.
 
 The real `.streamlit/secrets.toml` file is intentionally not committed because it can contain private API keys and is ignored by Git. Use the committed template to create your local secrets file:
 

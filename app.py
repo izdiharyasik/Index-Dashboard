@@ -1,6 +1,7 @@
 import hashlib
 import os
 from datetime import date, timedelta
+from io import StringIO
 
 import numpy as np
 import pandas as pd
@@ -215,7 +216,7 @@ def fred_api_key_cache_token(api_key):
 
 @st.cache_data(ttl=86400)
 def fetch_fred_series(series_id, *args, limit=10):
-    """Fetch FRED data via Nasdaq Data Link - no API key required.
+    """Fetch public FRED graph CSV data without an API key.
 
     Legacy callers may still pass the old FRED API key and cache-token
     arguments before the row limit; ignore those and keep the final integer
@@ -226,15 +227,19 @@ def fetch_fred_series(series_id, *args, limit=10):
             limit = arg
             break
 
-    url = f"https://data.nasdaq.com/api/v3/datasets/FRED/{series_id}.json?rows={limit}&order=desc"
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        records = response.json()["dataset"]["data"]
-        frame = pd.DataFrame(records, columns=["date", "value"])
+        frame = pd.read_csv(StringIO(response.text))
+        if frame.empty or len(frame.columns) < 2:
+            raise ValueError("FRED returned no usable data")
+
+        frame = frame.rename(columns={frame.columns[0]: "date", frame.columns[1]: "value"})
+        frame = frame[["date", "value"]].copy()
         frame["date"] = pd.to_datetime(frame["date"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
-        return frame.dropna().sort_values("date")
+        return frame.dropna().sort_values("date").tail(limit)
     except Exception as exc:
         st.warning(f"Could not fetch {series_id}: {exc}")
         return pd.DataFrame(columns=["date", "value"])
