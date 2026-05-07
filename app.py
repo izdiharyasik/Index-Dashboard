@@ -214,8 +214,18 @@ def fred_api_key_cache_token(api_key):
 
 
 @st.cache_data(ttl=86400)
-def fetch_fred_series(series_id, limit=10):
-    """Fetch FRED data via Nasdaq Data Link - no API key required."""
+def fetch_fred_series(series_id, *args, limit=10):
+    """Fetch FRED data via Nasdaq Data Link - no API key required.
+
+    Legacy callers may still pass the old FRED API key and cache-token
+    arguments before the row limit; ignore those and keep the final integer
+    positional argument as the requested row count.
+    """
+    for arg in reversed(args):
+        if isinstance(arg, int) and not isinstance(arg, bool):
+            limit = arg
+            break
+
     url = f"https://data.nasdaq.com/api/v3/datasets/FRED/{series_id}.json?rows={limit}&order=desc"
     try:
         response = requests.get(url, timeout=10)
