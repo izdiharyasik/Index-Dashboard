@@ -146,7 +146,6 @@ CHART_LINES = {
     "Risk-Free (SBN)": {"source": "static", "color": "#FF9800", "style": "dash"},
 }
 
-FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
 st.markdown(
     """
@@ -184,35 +183,29 @@ def get_secret_float(name, default):
 
 
 @st.cache_data(ttl=86400)
-def fetch_fred_series(series_id, limit=3):
+def fetch_fred_series(series_id, *args, limit=10):
+    """Fetch FRED data via Nasdaq Data Link - no API key required.
+
+    Legacy callers may still pass the old FRED API key and cache-token
+    arguments before the row limit; ignore those and keep the final integer
+    positional argument as the requested row count.
+    """
+    for arg in reversed(args):
+        if isinstance(arg, int) and not isinstance(arg, bool):
+            limit = arg
+            break
+
+    url = f"https://data.nasdaq.com/api/v3/datasets/FRED/{series_id}.json?rows={limit}&order=desc"
     try:
-        api_key = st.secrets.get("FRED_API_KEY", "")
-        if not api_key:
-            st.warning(f"FRED_API_KEY is missing. {series_id} data is unavailable until configured.")
-            return pd.DataFrame(columns=["date", "value"])
-        response = requests.get(
-            FRED_BASE_URL,
-            params={
-                "series_id": series_id,
-                "api_key": api_key,
-                "sort_order": "desc",
-                "limit": limit,
-                "file_type": "json",
-            },
-            timeout=15,
-        )
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        observations = response.json().get("observations", [])
-        frame = pd.DataFrame(observations)
-        if frame.empty:
-            st.warning(f"FRED returned no observations for {series_id}.")
-            return pd.DataFrame(columns=["date", "value"])
-        frame = frame[["date", "value"]].copy()
+        records = response.json()["dataset"]["data"]
+        frame = pd.DataFrame(records, columns=["date", "value"])
         frame["date"] = pd.to_datetime(frame["date"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
         return frame.dropna().sort_values("date")
     except Exception as exc:
-        st.warning(f"Could not fetch FRED series {series_id}: {exc}")
+        st.warning(f"Could not fetch {series_id}: {exc}")
         return pd.DataFrame(columns=["date", "value"])
 
 
@@ -608,7 +601,7 @@ def main():
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         margin=dict(l=10, r=10, t=70, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     sp500_return = np.nan
     inflation_cost = np.nan
