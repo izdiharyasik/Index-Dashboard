@@ -634,7 +634,7 @@ def main():
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         margin=dict(l=10, r=10, t=70, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     sp500_return = np.nan
     inflation_cost = np.nan
